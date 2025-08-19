@@ -61,14 +61,26 @@ jobs:
       id: get_latest_version
       if: steps.check_tag.outputs.TAG_EXISTS == 'false'
       run: |
-        $latestTag = git describe --tags --abbrev=0 2>$null
-        if ($LASTEXITCODE -eq 0) {
-          $latestVersion = $latestTag -replace '^v', ''
-          Write-Output "LATEST_VERSION=$latestVersion" >> $env:GITHUB_OUTPUT
-          Write-Output "Latest version: $latestVersion"
+        # Check if any tags exist
+        $allTags = git tag -l
+        if ($allTags -and $allTags.Count -gt 0) {
+          try {
+            $latestTag = git describe --tags --abbrev=0
+            if ($LASTEXITCODE -eq 0 -and $latestTag) {
+              $latestVersion = $latestTag -replace '^v', ''
+              Write-Output "LATEST_VERSION=$latestVersion" >> $env:GITHUB_OUTPUT
+              Write-Output "Latest version: $latestVersion"
+            } else {
+              Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
+              Write-Output "No valid previous tags found"
+            }
+          } catch {
+            Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
+            Write-Output "Error getting latest tag: $_"
+          }
         } else {
           Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
-          Write-Output "No previous tags found"
+          Write-Output "No previous tags found - this will be the first release"
         }
       shell: powershell
     
@@ -113,8 +125,10 @@ jobs:
         $exePath = "Build\Palworld_Breeding_Tree-$version-Windows.exe"
         
         if (Test-Path $exePath) {
-          Write-Output "EXE_PATH=$exePath" >> $env:GITHUB_OUTPUT
-          Write-Output "Build successful: $exePath"
+          # Convert Windows path to Unix path for GitHub Actions
+          $unixPath = $exePath.Replace('\', '/')
+          Write-Output "EXE_PATH=$unixPath" >> $env:GITHUB_OUTPUT
+          Write-Output "Build successful: $exePath (GitHub path: $unixPath)"
         } else {
           Write-Error "Expected executable not found: $exePath"
           exit 1
@@ -129,7 +143,8 @@ jobs:
         $changelogPath = "CHANGELOG.md"
         
         if (Test-Path $changelogPath) {
-          $content = Get-Content $changelogPath -Raw
+          # Read with UTF-8 encoding to properly handle emojis
+          $content = Get-Content $changelogPath -Raw -Encoding UTF8
           # Extract changelog section for current version only
           # Pattern matches ## [version] or ## version and captures content until next version or end
           $escapedVersion = $version.Replace('.', '\.')
@@ -155,8 +170,10 @@ jobs:
           $changelog = "Release version $version"
         }
         
-        # Handle multi-line content for GitHub Actions
+        # Handle multi-line content for GitHub Actions with UTF-8 encoding
         $delimiter = "EOF_CHANGELOG_$(Get-Random)"
+        # Use UTF-8 encoding for output to preserve emojis
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         Write-Output "CHANGELOG<<$delimiter" >> $env:GITHUB_OUTPUT
         Write-Output $changelog >> $env:GITHUB_OUTPUT
         Write-Output $delimiter >> $env:GITHUB_OUTPUT
@@ -170,8 +187,62 @@ jobs:
       run: |
         $version = "${{ steps.extract_version.outputs.VERSION }}"
         $exePath = "${{ steps.build.outputs.EXE_PATH }}"
-        Write-Output "DRY RUN: Would create release v$version with executable: $exePath"
-        Write-Output "Changelog: ${{ steps.changelog.outputs.CHANGELOG }}"
+        
+        # Set UTF-8 encoding for console output
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        
+        Write-Output "=== DRY RUN: Release Preview ==="
+        Write-Output "Tag: v$version"
+        Write-Output "Name: Palworld Breeding Tree v$version"
+        Write-Output "Executable (Unix path): $exePath"
+        
+        # Convert to Windows path for local verification
+        $winPath = $exePath.Replace('/', '\')
+        if (Test-Path $winPath) {
+          $fileSize = (Get-Item $winPath).Length
+          Write-Output "Executable size: $([math]::Round($fileSize/1MB, 2)) MB"
+          Write-Output "Local path: $winPath"
+        } else {
+          Write-Warning "Executable not found at: $winPath"
+        }
+        
+        Write-Output ""
+        Write-Output "=== Changelog Preview ==="
+        Write-Output "${{ steps.changelog.outputs.CHANGELOG }}"
+      shell: powershell
+    
+    - name: Verify executable before release
+      if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false' && github.event.inputs.dry_run != 'true'
+      run: |
+        $unixPath = "${{ steps.build.outputs.EXE_PATH }}"
+        # Convert back to Windows path for local verification
+        $exePath = $unixPath.Replace('/', '\')
+        
+        if (-not (Test-Path $exePath)) {
+          Write-Error "Executable not found at: $exePath (Unix path: $unixPath)"
+          exit 1
+        }
+        $fileSize = (Get-Item $exePath).Length
+        Write-Output "Executable found: $exePath (Size: $([math]::Round($fileSize/1MB, 2)) MB)"
+        Write-Output "Unix path for release: $unixPath"
+      shell: powershell
+    
+    - name: Debug file listing
+      if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false' && github.event.inputs.dry_run != 'true'
+      run: |
+        Write-Output "=== Directory Listing ==="
+        Write-Output "Current directory:"
+        Get-Location
+        Write-Output "Build directory contents:"
+        if (Test-Path "Build") {
+          Get-ChildItem "Build" | ForEach-Object { Write-Output "  $($_.Name) ($($_.Length) bytes)" }
+        } else {
+          Write-Output "  Build directory not found"
+        }
+        
+        $unixPath = "${{ steps.build.outputs.EXE_PATH }}"
+        Write-Output "File to upload: $unixPath"
+        Write-Output "File exists check: $(Test-Path $unixPath.Replace('/', '\'))"
       shell: powershell
     
     - name: Create Release
@@ -190,6 +261,9 @@ jobs:
     - name: Summary
       if: always()
       run: |
+        # Set UTF-8 encoding for console output
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        
         $version = "${{ steps.extract_version.outputs.VERSION }}"
         $tagExists = "${{ steps.check_tag.outputs.TAG_EXISTS }}"
         $shouldRelease = "${{ steps.compare_versions.outputs.SHOULD_RELEASE }}"
@@ -209,5 +283,9 @@ jobs:
           Write-Output "Result: Dry run completed successfully"
         } else {
           Write-Output "Result: Release created successfully"
+          $exePath = "${{ steps.build.outputs.EXE_PATH }}"
+          if ($exePath) {
+            Write-Output "Executable included: $exePath"
+          }
         }
       shell: powershell
