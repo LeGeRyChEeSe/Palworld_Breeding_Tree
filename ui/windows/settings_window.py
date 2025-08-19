@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QComboBox, QSlider, QPushButton, QFrame)
 from PyQt6.QtCore import Qt
+from typing import cast
 from core.variables_manager import VariablesManager
 from core.observer_manager import ObserverManager, NotificationTypes
 
@@ -70,7 +71,11 @@ class SettingsWindow(QWidget):
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setMinimum(1)
         slider.setMaximum(3)
-        slider.setValue(self.variablesManager.getConfig("maxTrees"))
+        max_trees = self.variablesManager.getConfig("maxTrees")
+        if max_trees is not None:
+            slider.setValue(max_trees)
+        else:
+            slider.setValue(3)
         slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         slider.setTickInterval(1)
         
@@ -100,7 +105,11 @@ class SettingsWindow(QWidget):
     def createThemeSwitch(self):
         button = QPushButton()
         button.setCheckable(True)
-        button.setChecked(self.variablesManager.getConfig("darkMode"))
+        dark_mode = self.variablesManager.getConfig("darkMode")
+        if dark_mode is not None:
+            button.setChecked(dark_mode)
+        else:
+            button.setChecked(False)
         button.setText(self.variablesManager.getText("dark_mode" if button.isChecked() else "light_mode"))
         button.clicked.connect(self.onThemeChanged)
         return button
@@ -158,16 +167,29 @@ class SettingsWindow(QWidget):
             (self.orderContainer, "pal_order")
         ]
         for container, textKey in containers:
-            container.layout().itemAt(0).widget().setText(
-                self.variablesManager.getText(textKey)
-            )
+            layout = container.layout()
+            if layout is not None:
+                layout_item = layout.itemAt(0)
+                if layout_item is not None:
+                    widget = layout_item.widget()
+                    if widget is not None:
+                        # Cast to QLabel since we know it's the first widget (label)
+                        label_widget = cast(QLabel, widget)
+                        label_widget.setText(self.variablesManager.getText(textKey))
         
         # Mettre à jour aussi les textes des widgets de configuration
-        order_combo = self.orderContainer.layout().itemAt(1).widget()
-        order_combo.clear()
-        order_combo.addItems([
-            self.variablesManager.getText("alphabetical"),
-            self.variablesManager.getText("paldex")
-        ])
+        layout = self.orderContainer.layout()
+        if layout is not None:
+            layout_item = layout.itemAt(1)
+            if layout_item is not None:
+                widget = layout_item.widget()
+                if widget is not None:
+                    # Cast to QComboBox since we know it's the order selector
+                    order_combo = cast(QComboBox, widget)
+                    order_combo.clear()
+                    order_combo.addItems([
+                        self.variablesManager.getText("alphabetical"),
+                        self.variablesManager.getText("paldex")
+                    ])
         
         self.themeWidget.setText(self.variablesManager.getText("dark_mode" if self.themeWidget.isChecked() else "light_mode"))

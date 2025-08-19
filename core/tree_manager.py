@@ -1,8 +1,50 @@
 from graphviz import Digraph
-from core.variables_manager import VariablesManager
+from core.variables_manager import VariablesManager, resourcePath
 from core.graph_manager import GraphManager
 from PIL import Image
-from os import path
+from os import path, environ
+from functools import lru_cache
+from collections import OrderedDict
+import threading
+import graphviz
+
+class LRUImageCache:
+    """Cache LRU thread-safe pour les images avec limite de mémoire"""
+    def __init__(self, max_size_mb=100):
+        self.max_size_bytes = max_size_mb * 1024 * 1024
+        self.current_size = 0
+        self.cache = OrderedDict()
+        self.lock = threading.Lock()
+    
+    def get(self, key):
+        with self.lock:
+            if key in self.cache:
+                # Déplacer vers la fin (plus récemment utilisé)
+                value = self.cache.pop(key)
+                self.cache[key] = value
+                return value
+        return None
+    
+    def put(self, key, value, size_bytes=0):
+        with self.lock:
+            # Si la clé existe déjà, la supprimer
+            if key in self.cache:
+                self.current_size -= self.cache[key]['size']
+                del self.cache[key]
+            
+            # Éviction si nécessaire
+            while self.current_size + size_bytes > self.max_size_bytes and self.cache:
+                oldest_key, oldest_value = self.cache.popitem(last=False)
+                self.current_size -= oldest_value['size']
+            
+            # Ajouter le nouvel élément
+            self.cache[key] = {'value': value, 'size': size_bytes}
+            self.current_size += size_bytes
+    
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+            self.current_size = 0
 
 class TreeManager:
     def __init__(self):
@@ -10,7 +52,22 @@ class TreeManager:
         self.graphManager = GraphManager()
         self.iconsPath = self.variablesManager.iconsPath
         self.cachePath = self.variablesManager.cachePath
-        self.imagesCache = {}
+        self.imagesCache = LRUImageCache(max_size_mb=100)
+        
+        # Configuration explicite du chemin Graphviz
+        graphviz_path = resourcePath(path.join("Graphviz", "bin"))
+        if path.exists(graphviz_path):
+            environ["PATH"] = graphviz_path + path.pathsep + environ.get("PATH", "")
+            # Configuration alternative pour la bibliothèque graphviz
+            try:
+                # Éviter les erreurs Pylance en utilisant getattr
+                backend_execute = getattr(graphviz.backend, 'execute', None)
+                if backend_execute:
+                    engines = getattr(backend_execute, 'ENGINES', None)
+                    if engines and hasattr(engines, '__setitem__'):
+                        engines['dot'] = path.join(graphviz_path, 'dot.exe')
+            except (AttributeError, Exception):
+                pass
 
     def getNoneImage(self):
         return path.join(
@@ -21,16 +78,23 @@ class TreeManager:
     def AssemblePalsIcons(self, parentsList):
         # Créer une clé de cache unique pour cette combinaison
         cacheKey = "_".join(sorted(parentsList))
-        if cacheKey in self.imagesCache:
-            return self.imagesCache[cacheKey]
+        cached_result = self.imagesCache.get(cacheKey)
+        if cached_result:
+            return cached_result['value']
 
         destPath = path.join(self.cachePath,cacheKey+".png")
         images = []
         
-        # Charger toutes les images en une fois
+        # Charger toutes les images en une fois avec gestion d'erreurs
         for x in parentsList:
-            imagePath = self.getGenderImage(x) if (" f" in x or " m" in x) else path.join(self.iconsPath,x+".png")
-            images.append(Image.open(imagePath))
+            try:
+                imagePath = self.getGenderImage(x) if (" f" in x or " m" in x) else path.join(self.iconsPath,x+".png")
+                if path.exists(imagePath):
+                    images.append(Image.open(imagePath))
+                else:
+                    images.append(Image.open(self.getNoneImage()))
+            except Exception:
+                images.append(Image.open(self.getNoneImage()))
 
         # Limiter le nombre de parents secondaires à 4 par ligne
         rows = [images[i:i + 4] for i in range(0, len(images), 4)]
@@ -59,25 +123,40 @@ class TreeManager:
                 newImage.paste(horizontalSeparator, (0, yOffset))
 
         newImage.save(destPath)
-        self.imagesCache[cacheKey] = destPath
+        # Calculer la taille approximative du fichier pour le cache
+        file_size = path.getsize(destPath) if path.exists(destPath) else 1024
+        self.imagesCache.put(cacheKey, destPath, file_size)
         return destPath
 
     def getGenderImage(self, pal):
-        if pal in self.imagesCache:
-            return self.imagesCache[pal]
+        cached_result = self.imagesCache.get(pal)
+        if cached_result:
+            return cached_result['value']
 
         destPath = path.join(self.cachePath,pal + ".png")
         basePal = pal.replace(" f", "").replace(" m", "")
         gender = pal.split(" ")[1]
-        palImage = Image.open(path.join(self.iconsPath,basePal + ".png"))
-        genderImage = Image.open(path.join(self.iconsPath,gender + ".png")).reduce(10)
+        
+        try:
+            palImagePath = path.join(self.iconsPath,basePal + ".png")
+            genderImagePath = path.join(self.iconsPath,gender + ".png")
+            
+            if not path.exists(palImagePath) or not path.exists(genderImagePath):
+                return self.getNoneImage()
+                
+            palImage = Image.open(palImagePath)
+            genderImage = Image.open(genderImagePath).reduce(10)
+        except Exception:
+            return self.getNoneImage()
         
         newImage = Image.new('RGBA', palImage.size)
         newImage.paste(palImage, (0, 0))
         newImage.paste(genderImage, (0, 0), genderImage)
         newImage.save(destPath, "PNG")
         
-        self.imagesCache[pal] = destPath
+        # Calculer la taille du fichier pour le cache
+        file_size = path.getsize(destPath) if path.exists(destPath) else 1024
+        self.imagesCache.put(pal, destPath, file_size)
         return destPath
 
     def getShortestGraphs(self, way: list, size: str):
@@ -96,7 +175,7 @@ class TreeManager:
             graph_attr={
                 "bgcolor": 'transparent',
                 "ratio": '1',
-                "size": f"{size/96},{size/96}!"
+                "size": f"{int(size)/96},{int(size)/96}!"
             }
         )
         # Préparer toutes les images nécessaires en une seule fois

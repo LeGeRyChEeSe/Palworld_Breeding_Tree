@@ -13,8 +13,10 @@ def resourcePath(relativePath):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
-        basePath = sys._MEIPASS
-    except Exception:
+        basePath = getattr(sys, '_MEIPASS', None)
+        if basePath is None:
+            raise AttributeError('_MEIPASS not found')
+    except (AttributeError, Exception):
         basePath = path.abspath(".")
     return path.join(basePath, relativePath)
 
@@ -95,11 +97,12 @@ class TreeFrame(QFrame):
             combo.setEditable(True)
             combo.setIconSize(QSize(int(headerHeight * 0.55), int(headerHeight * 0.55)))  # Taille d'icône proportionnelle
             combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            combo.currentIndexChanged.connect(lambda x : self.updateTree(0))
+            combo.currentIndexChanged.connect(lambda _: self.updateTree(0))
             # Centrer le texte verticalement et ajuster les marges
             lineEdit = combo.lineEdit()
-            lineEdit.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-            lineEdit.setStyleSheet(f"""
+            if lineEdit is not None:
+                lineEdit.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                lineEdit.setStyleSheet(f"""
                 QLineEdit {{
                     margin: 0px;
                     padding: 0px;
@@ -213,6 +216,7 @@ class TreeFrame(QFrame):
             self.parentChoice.blockSignals(False)
             self.childChoice.blockSignals(False)
         except Exception as e:
+            _ = e  # Variable utilisée pour éviter l'avertissement
             # Restaurer les signaux en cas d'erreur
             self.parentChoice.blockSignals(False)
             self.childChoice.blockSignals(False)
@@ -294,7 +298,7 @@ class TreeFrame(QFrame):
             currentPath = self.paths[self.which]
             # Mettre en cache
             self.lastPath = currentPath
-            treeImage = self.treeManager.getShortestGraphs(currentPath, self.tree.width())
+            treeImage = self.treeManager.getShortestGraphs(currentPath, str(self.tree.width()))
             self.lastTree = QPixmap(treeImage)
         self.resizeImage()
     def goNext(self, value):

@@ -1,0 +1,213 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no release created)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  check-version-and-release:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Extract version
+      id: extract_version
+      run: |
+        $version = python core/scripts/get_version.py
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Failed to extract version"
+          exit 1
+        }
+        Write-Output "VERSION=$version" >> $env:GITHUB_OUTPUT
+        Write-Output "Current version: $version"
+      shell: powershell
+    
+    - name: Check if tag exists
+      id: check_tag
+      run: |
+        $version = "${{ steps.extract_version.outputs.VERSION }}"
+        $tagExists = git tag -l "v$version"
+        if ($tagExists) {
+          Write-Output "TAG_EXISTS=true" >> $env:GITHUB_OUTPUT
+          Write-Output "Tag v$version already exists, skipping release"
+        } else {
+          Write-Output "TAG_EXISTS=false" >> $env:GITHUB_OUTPUT
+          Write-Output "Tag v$version does not exist, proceeding with release"
+        }
+      shell: powershell
+    
+    - name: Get latest release version
+      id: get_latest_version
+      if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+      run: |
+        $latestTag = git describe --tags --abbrev=0 2>$null
+        if ($LASTEXITCODE -eq 0) {
+          $latestVersion = $latestTag -replace '^v', ''
+          Write-Output "LATEST_VERSION=$latestVersion" >> $env:GITHUB_OUTPUT
+          Write-Output "Latest version: $latestVersion"
+        } else {
+          Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
+          Write-Output "No previous tags found"
+        }
+      shell: powershell
+    
+    - name: Compare versions
+      id: compare_versions
+      if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+      run: |
+        $currentVersion = "${{ steps.extract_version.outputs.VERSION }}"
+        $latestVersion = "${{ steps.get_latest_version.outputs.LATEST_VERSION }}"
+        
+        if (-not $latestVersion) {
+          Write-Output "SHOULD_RELEASE=true" >> $env:GITHUB_OUTPUT
+          Write-Output "No previous version found, creating first release"
+          exit 0
+        }
+        
+        # Simple version comparison (assumes semantic versioning)
+        $current = [System.Version]::Parse($currentVersion)
+        $latest = [System.Version]::Parse($latestVersion)
+        
+        if ($current -gt $latest) {
+          Write-Output "SHOULD_RELEASE=true" >> $env:GITHUB_OUTPUT
+          Write-Output "Version $currentVersion is greater than $latestVersion, proceeding with release"
+        } else {
+          Write-Output "SHOULD_RELEASE=false" >> $env:GITHUB_OUTPUT
+          Write-Output "Version $currentVersion is not greater than $latestVersion, skipping release"
+        }
+      shell: powershell
+    
+    - name: Build executable
+      id: build
+      if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false'
+      run: |
+        Write-Output "Building executable..."
+        .\build.bat
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Build failed"
+          exit 1
+        }
+        
+        $version = "${{ steps.extract_version.outputs.VERSION }}"
+        $exePath = "Build\Palworld_Breeding_Tree-$version-Windows.exe"
+        
+        if (Test-Path $exePath) {
+          Write-Output "EXE_PATH=$exePath" >> $env:GITHUB_OUTPUT
+          Write-Output "Build successful: $exePath"
+        } else {
+          Write-Error "Expected executable not found: $exePath"
+          exit 1
+        }
+      shell: powershell
+    
+    - name: Extract changelog
+      id: changelog
+      if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false'
+      run: |
+        $version = "${{ steps.extract_version.outputs.VERSION }}"
+        $changelogPath = "CHANGELOG.md"
+        
+        if (Test-Path $changelogPath) {
+          $content = Get-Content $changelogPath -Raw
+          # Extract changelog section for current version only
+          # Pattern matches ## [version] or ## version and captures content until next version or end
+          $escapedVersion = $version.Replace('.', '\.')
+          $pattern = "(?s)^## \[?v?$escapedVersion\]?.*?(?=^## \[?v?[\d\.]+\]?|\z)"
+          $match = [regex]::Match($content, $pattern, [System.Text.RegularExpressions.RegexOptions]::Multiline)
+          
+          if ($match.Success) {
+            $changelog = $match.Value.Trim()
+            # Remove the version header line and any date information
+            $changelog = $changelog -replace "^## \[?v?$escapedVersion\]?[^\r\n]*(\r?\n)?", ""
+            $changelog = $changelog.Trim()
+            
+            # Ensure changelog is not empty
+            if ([string]::IsNullOrWhiteSpace($changelog)) {
+              $changelog = "Release version $version"
+            }
+          } else {
+            Write-Warning "Could not find changelog section for version $version"
+            $changelog = "Release version $version"
+          }
+        } else {
+          Write-Warning "CHANGELOG.md not found"
+          $changelog = "Release version $version"
+        }
+        
+        # Handle multi-line content for GitHub Actions
+        $delimiter = "EOF_CHANGELOG_$(Get-Random)"
+        Write-Output "CHANGELOG<<$delimiter" >> $env:GITHUB_OUTPUT
+        Write-Output $changelog >> $env:GITHUB_OUTPUT
+        Write-Output $delimiter >> $env:GITHUB_OUTPUT
+        
+        Write-Output "Changelog extracted for version $version"
+        Write-Output "First 200 chars of changelog: $($changelog.Substring(0, [Math]::Min(200, $changelog.Length)))"
+      shell: powershell
+    
+    - name: Create Release (Dry Run)
+      if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false' && github.event.inputs.dry_run == 'true'
+      run: |
+        $version = "${{ steps.extract_version.outputs.VERSION }}"
+        $exePath = "${{ steps.build.outputs.EXE_PATH }}"
+        Write-Output "DRY RUN: Would create release v$version with executable: $exePath"
+        Write-Output "Changelog: ${{ steps.changelog.outputs.CHANGELOG }}"
+      shell: powershell
+    
+    - name: Create Release
+      if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false' && github.event.inputs.dry_run != 'true'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: "v${{ steps.extract_version.outputs.VERSION }}"
+        name: "Palworld Breeding Tree v${{ steps.extract_version.outputs.VERSION }}"
+        body: ${{ steps.changelog.outputs.CHANGELOG }}
+        files: ${{ steps.build.outputs.EXE_PATH }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Summary
+      if: always()
+      run: |
+        $version = "${{ steps.extract_version.outputs.VERSION }}"
+        $tagExists = "${{ steps.check_tag.outputs.TAG_EXISTS }}"
+        $shouldRelease = "${{ steps.compare_versions.outputs.SHOULD_RELEASE }}"
+        $isDryRun = "${{ github.event.inputs.dry_run }}"
+        
+        Write-Output "=== Auto-Release Summary ==="
+        Write-Output "Version: $version"
+        Write-Output "Tag exists: $tagExists"
+        Write-Output "Should release: $shouldRelease"
+        Write-Output "Dry run: $isDryRun"
+        
+        if ($tagExists -eq "true") {
+          Write-Output "Result: Skipped - Tag already exists"
+        } elseif ($shouldRelease -eq "false") {
+          Write-Output "Result: Skipped - Version not greater than latest"
+        } elseif ($isDryRun -eq "true") {
+          Write-Output "Result: Dry run completed successfully"
+        } else {
+          Write-Output "Result: Release created successfully"
+        }
+      shell: powershell

@@ -28,7 +28,7 @@ class GraphManager:
         self.gameList = ["Nyafia","Prunelia","Gildane","Turtacle","Turtacle Terra","Anubis","Incineram","Incineram Noct","Mau","Mau Cryst","Rushoar","Lifmunk","Tocotoco","Eikthyrdeer","Eikthyrdeer Terra","Digtoise","Galeclaw","Grizzbolt","Teafant","Direhowl","Gorirat","Gorirat Terra","Jolthog","Jolthog Cryst","Univolt","Foxparks","Bristla","Lunaris","Pengullet","Pengullet Lux","Dazzi","Gobfin","Gobfin Ignis","Lamball","Jormuntide","Jormuntide Ignis","Loupmoon","Hangyu","Hangyu Cryst","Suzaku","Suzaku Aqua","Pyrin","Pyrin Noct","Elphidran","Elphidran Aqua","Woolipop","Cryolinx","Melpaca","Surfent","Surfent Terra","Cawgnito","Azurobe","Azurobe Cryst","Cattiva","Depresso","Fenglope","Reptyro","Reptyro Cryst","Maraith","Robinquill","Robinquill Terra","Relaxaurus","Relaxaurus Lux","Kitsun","Leezpunk","Leezpunk Ignis","Fuack","Fuack Ignis","Vanwyrm","Vanwyrm Cryst","Chikipi","Dinossom","Dinossom Lux","Sparkit","Frostallion","Frostallion Noct","Mammorest","Mammorest Cryst","Felbat","Broncherry","Broncherry Aqua","Faleris","Blazamut","Blazamut Ryu","Caprity","Reindrix","Shadowbeak","Sibelyx","Vixy","Wixen","Wixen Noct","Lovander","Hoocrates","Kelpsea","Kelpsea Ignis","Killamari","Killamari Primo","Mozzarina","Wumpo","Wumpo Botan","Vaelet","Nitewing","Flopie","Lyleen","Lyleen Noct","Elizabee","Beegarde","Tombat","Mossanda","Mossanda Lux","Arsox","Rayhound","Fuddler","Astegon","Verdash","Foxcicle","Jetragon","Daedream","Tanzee","Blazehowl","Blazehowl Noct","Kingpaca","Kingpaca Cryst","Gumoss","Swee","Sweepa","Katress","Katress Ignis","Ribbuny","Beakon","Warsect","Warsect Terra","Paladius","Nox","Penking","Penking Lux","Chillet","Chillet Ignis","Quivern","Quivern Botan","Helzephyr","Helzephyr Lux","Ragnahawk","Bushi","Bushi Noct","Celaray","Celaray Lux","Necromus","Petallia","Grintale","Cinnamoth","Menasting","Menasting Terra","Orserk","Cremis","Dumud","Dumud Gild","Flambelle","Rooby","Bellanoir","Bellanoir Libero","Selyne","Croajiro","Croajiro Noct","Lullu","Shroomer","Shroomer Noct","Kikit","Sootseer","Prixter","Knocklem","Yakumo","Dogen","Dazemu","Mimog","Xenovader","Xenogard","Xenolord","Nitemary","Starryon","Silvegis","Smokie","Celesdir","Omascul","Splatterina","Tarantriss","Azurmane","Gloopie","Whalaska","Whalaska Ignis","Jelliette","Foxparks Cryst","Caprity Noct","Ribbuny Botan","Loupmoon Cryst","Kitsun Noct","Dazzi Noct","Cryolinx Terra","Fenglope Lux","Faleris Aqua","Bastigor","Ghangler","Ghangler Ignis","Icelyn","Herbil","Munchill","Finsider","Finsider Ignis","Polapup","Braloha","Palumba","Frostplume","Jellroy","Neptilius","Green Slime","Blue Slime","Red Slime","Purple Slime","Illuminant Slime","Rainbow Slime","Enchanted Sword","Cave Bat","Illuminant Bat","Eye of Cthulhu","Demon Eye"]
         self.onlyHimself = [pal for pal in self.jsonPals if self.jsonPals[pal]["onlyHimself"]]
         self.exceptions = {pal: self.jsonPals[pal]["exception"] for pal in self.jsonPals if self.jsonPals[pal]["exception"]}
-        self.couplesMaked = []
+        # Removed self.couplesMaked - utilisation d'un set local dans getEdges()
         self.exceptionsGender = self.getExceptionsGender()
         self.palsWithoutExceptions = [pal for pal in self.jsonPals if pal not in self.exceptions and pal not in self.onlyHimself]
         self.palsWithoutExceptions.sort(key=lambda x: self.jsonPals[x]["value"])
@@ -85,28 +85,34 @@ class GraphManager:
             parent1, child, data = edge
             if self.graph.has_edge(parent1, child):
                 existingData = self.graph.get_edge_data(parent1, child)
-                if isinstance(existingData['secondParent'], list):
-                    existingData['secondParent'].extend(data['secondParent'])
+                # Créer une copie modifiable des données existantes
+                updatedData = dict(existingData)
+                if isinstance(updatedData['secondParent'], list):
+                    updatedData['secondParent'].extend(data['secondParent'])
                 else:
-                    existingData['secondParent'] = [existingData['secondParent']] + data['secondParent']
+                    updatedData['secondParent'] = [updatedData['secondParent']] + data['secondParent']
+                # Mettre à jour l'arête avec les nouvelles données
+                self.graph.add_edge(parent1, child, **updatedData)
             else:
                 self.graph.add_edge(parent1, child, **data)
 
     def getEdges(self):
-        """Traite un sous-ensemble d'indices pour la construction du graphe"""
+        """Traite un sous-ensemble d'indices pour la construction du graphe - version optimisée"""
         edges = []
-        for i in range(len(self.jsonPals)):
-            parent1 = self.palList[i]
-            for j in range(len(self.jsonPals)):
-                parent2 = self.palList[j]
-                if parent1 == parent2:
-                    edges.append((parent1, parent2, {'secondParent': [parent2]}))
-                    continue
-                if (parent1, parent2) in self.couplesMaked:
+        processed_couples = set()  # Utiliser un set pour O(1) lookup
+        
+        # Auto-reproduction d'abord
+        for parent in self.palList:
+            edges.append((parent, parent, {'secondParent': [parent]}))
+        
+        # Traitement optimisé des couples sans doublons
+        for i, parent1 in enumerate(self.palList):
+            for j, parent2 in enumerate(self.palList[i+1:], i+1):  # Éviter les doublons avec j>i
+                couple_key = tuple(sorted([parent1, parent2]))  # Clé triée pour éviter (A,B) vs (B,A)
+                if couple_key in processed_couples:
                     continue
                 
-                self.couplesMaked.append((parent1, parent2))
-                self.couplesMaked.append((parent2, parent1))
+                processed_couples.add(couple_key)
                 
                 genre = {}
                 

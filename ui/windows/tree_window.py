@@ -1,4 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QGridLayout
+from PyQt6.QtCore import QTimer
 from ui.widgets.tree_frame import TreeFrame
 from core.variables_manager import VariablesManager
 from core.observer_manager import ObserverManager, NotificationTypes
@@ -15,12 +16,22 @@ class TreeWindow(QWidget):
         # Créer les frames en fonction du paramètre combo
         self.treeFrames = []
         locked = self.variablesManager.getConfig("locked")
-        for lock in locked:
-            self.treeFrames.append(TreeFrame(self.minimumSquareSize,lock))
-        for _ in range(3-len(locked)):
+        if locked is not None:
+            for lock in locked:
+                self.treeFrames.append(TreeFrame(self.minimumSquareSize,lock))
+            remaining_frames = 3 - len(locked)
+        else:
+            locked = []
+            remaining_frames = 3
+        for _ in range(remaining_frames):
             self.treeFrames.append(TreeFrame(self.minimumSquareSize))
-        # Cache pour la dernière taille calculée
+        # Cache pour la dernière taille calculée et debouncing
         self.lastCalculatedSize = None
+        self.resizeTimer = QTimer()
+        self.resizeTimer.setSingleShot(True)
+        self.resizeTimer.setInterval(150)  # Délai de 150ms pour debounce
+        self.resizeTimer.timeout.connect(self._performResize)
+        self.pendingSize = None
         self.setupUi()
 
     def setupUi(self):
@@ -33,6 +44,7 @@ class TreeWindow(QWidget):
 
 
     def resizeEvent(self, event):
+        _ = event  # Variable utilisée pour éviter l'avertissement
         # Sauvegarder la nouvelle taille
         self.variablesManager.setConfig(
             "windowSize",
@@ -41,28 +53,51 @@ class TreeWindow(QWidget):
                 "height": int(self.size().height() * self.variablesManager.dpi)
             }
         )
-        self.doResize()  # Appeler do_resize pour redimensionner les frames
+        # Utiliser debouncing pour éviter les recalculs trop fréquents
+        self.pendingSize = self.size()
+        self.resizeTimer.start()
+
+    def _performResize(self):
+        """Méthode interne pour effectuer le redimensionnement après debouncing"""
+        if self.pendingSize is not None:
+            self.doResize()
+            self.pendingSize = None
 
     def doResize(self):
         size = self.size()
         width = size.width()
         height = size.height()
         
+        # Éviter les recalculs inutiles avec cache
+        current_size_key = (width, height, self.variablesManager.getConfig("maxTrees"))
+        if self.lastCalculatedSize == current_size_key:
+            return
+        
+        self.lastCalculatedSize = current_size_key
+        
         # Calcul du nombre optimal de frames
+        max_trees = self.variablesManager.getConfig("maxTrees")
+        if max_trees is None:
+            max_trees = 3
         optimalFrameCount = min(
-            self.variablesManager.getConfig("maxTrees"),
+            max_trees,
             max(1, width // self.minimumSquareSize)
         )
         # Recalculer la taille des frames
         availableWidth = width - (optimalFrameCount + 1) * 2
         widthPerFrame = availableWidth // optimalFrameCount
         squareSize = min(widthPerFrame, height - int(40 / self.variablesManager.dpi))  # Ajuster pour les marges en fonction du DPI
+        
         # Mise à jour des frames
         if optimalFrameCount != self.visibleFrames:
             # Nettoyer le layout existant
-            for i in reversed(range(self.mainLayout.count())): 
-                self.mainLayout.itemAt(i).widget().hide()
-                self.mainLayout.removeItem(self.mainLayout.itemAt(i))
+            for i in reversed(range(self.mainLayout.count())):
+                item = self.mainLayout.itemAt(i)
+                if item is not None:
+                    widget = item.widget()
+                    if widget is not None:
+                        widget.hide()
+                    self.mainLayout.removeItem(item)
             
             # Ajouter les nouveaux frames
             for i in range(optimalFrameCount):

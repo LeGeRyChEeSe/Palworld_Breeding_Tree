@@ -13,8 +13,10 @@ def resourcePath(relativePath):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
-        basePath = sys._MEIPASS
-    except Exception:
+        basePath = getattr(sys, '_MEIPASS', None)
+        if basePath is None:
+            raise AttributeError('_MEIPASS not found')
+    except (AttributeError, Exception):
         basePath = path.abspath(".")
     return path.join(basePath, relativePath)
 
@@ -32,8 +34,13 @@ class MainWindow(QMainWindow):
         self.variablesManager.dpi = self.dpi
         size = self.app.primaryScreen().size()
         self.variablesManager.minScreenSize = min(size.height(),size.width())
-        configWidth = int(self.variablesManager.getConfig("windowSize")["width"]/self.dpi)
-        configHeight = int(self.variablesManager.getConfig("windowSize")["height"]/self.dpi)
+        window_size = self.variablesManager.getConfig("windowSize")
+        if window_size is not None and isinstance(window_size, dict):
+            configWidth = int(window_size.get("width", self.variablesManager.minScreenSize)/self.dpi)
+            configHeight = int(window_size.get("height", self.variablesManager.minScreenSize)/self.dpi)
+        else:
+            configWidth = int(self.variablesManager.minScreenSize/2.2)
+            configHeight = int(configWidth * 1.085)
         
         # Définir la taille une seule fois
         largeur = (self.variablesManager.minScreenSize/2.2)

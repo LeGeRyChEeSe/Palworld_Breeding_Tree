@@ -1,17 +1,26 @@
-call ./palworld_breeding_tree\Scripts\activate.bat
+@echo off
+cd /d "%~dp0"
+call ./venv/Scripts/activate.bat
+
+REM Récupérer la version dynamiquement
+python core/scripts/get_version.py > version.tmp
+set /p VERSION=<version.tmp
+del version.tmp
+echo Building version: %VERSION%
+
 pyinstaller --onefile --clean ^
 --noconsole ^
---distpath "../Build" ^
---specpath "../.Building" ^
---name "Palworld_Breeding_Tree-3.0.1-Windows" ^
---icon "../Source/Icons/icon.ico" ^
---workpath "../.Building" ^
+--distpath "Build" ^
+--specpath ".Building" ^
+--name "Palworld_Breeding_Tree-%VERSION%-Windows" ^
+--icon "%~dp0Icons\icon.ico" ^
+--workpath ".Building" ^
 --collect-all graphviz ^
 --hidden-import="graphviz._defaults" ^
 --hidden-import="graphviz.backend" ^
 --hidden-import="graphviz.dot" ^
---add-data "C:\Users\mazin.DESKTOP-RCQGMS8\Documents\projets_dev\Palworld_Breeding_Tree\Source\Graphviz;Graphviz" ^
---add-data "C:\Users\mazin.DESKTOP-RCQGMS8\Documents\projets_dev\Palworld_Breeding_Tree\Source\languages;languages" ^
---add-data "C:\Users\mazin.DESKTOP-RCQGMS8\Documents\projets_dev\Palworld_Breeding_Tree\Source\Icons;Icons" ^
---add-data "C:\Users\mazin.DESKTOP-RCQGMS8\Documents\projets_dev\Palworld_Breeding_Tree\Source\pals.json;." ^
-main.py
+--add-data "%~dp0Graphviz;Graphviz" ^
+--add-data "%~dp0languages;languages" ^
+--add-data "%~dp0Icons;Icons" ^
+--add-data "%~dp0pals.json;." ^
+Main.py

@@ -1,6 +1,7 @@
 import json
 from core.language_manager import LanguageManager
 from core.observer_manager import ObserverManager, NotificationTypes
+from core import __version__
 from os import environ, path, mkdir, listdir, unlink, remove, rename, system
 import sys
 import requests
@@ -11,12 +12,15 @@ def resourcePath(relativePath):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
-        basePath = sys._MEIPASS
+        basePath = getattr(sys, '_MEIPASS', path.abspath("."))
     except Exception:
         basePath = path.abspath(".")
     return path.join(basePath, relativePath)
 
-environ["PATH"] += resourcePath("Graphviz\\bin")+";"
+# Configuration du PATH pour Graphviz
+graphviz_bin_path = resourcePath(path.join("Graphviz", "bin"))
+if graphviz_bin_path not in environ.get("PATH", ""):
+    environ["PATH"] = graphviz_bin_path + path.pathsep + environ.get("PATH", "")
 
 class VariablesManager:
     _instance = None
@@ -38,7 +42,9 @@ class VariablesManager:
             "maxTrees": 3,
             "locked": []  # Ajouter le paramètre par défaut pour "combos"
         }
-        self.version = "3.0.3"
+        self.version = __version__
+        self.minScreenSize = 800  # Taille minimum d'écran par défaut
+        self.dpi = 1.0  # DPI par défaut
         self.languageManager = LanguageManager()
         self.configPath = self.getConfigPath()
         self.picklePath = self.getPicklePath()
@@ -46,8 +52,10 @@ class VariablesManager:
         self.iconsPath = self.getIconsPath()
         self.rootPath = resourcePath("")
         self.loadConfig()
-        if(self.config.keys() != self.defaults.keys()):
-            self.config = self.defaults.copy()
+        # Fusionner les configurations manquantes au lieu de remplacer complètement
+        for key, default_value in self.defaults.items():
+            if key not in self.config:
+                self.config[key] = default_value
         self.languageManager.loadLanguage(self.config["language"])
         self.observerManager = ObserverManager.getInstance()
         self.observerManager.addObserver(self)
