@@ -125,8 +125,10 @@ jobs:
         $exePath = "Build\Palworld_Breeding_Tree-$version-Windows.exe"
         
         if (Test-Path $exePath) {
-          Write-Output "EXE_PATH=$exePath" >> $env:GITHUB_OUTPUT
-          Write-Output "Build successful: $exePath"
+          # Convert Windows path to Unix path for GitHub Actions
+          $unixPath = $exePath.Replace('\', '/')
+          Write-Output "EXE_PATH=$unixPath" >> $env:GITHUB_OUTPUT
+          Write-Output "Build successful: $exePath (GitHub path: $unixPath)"
         } else {
           Write-Error "Expected executable not found: $exePath"
           exit 1
@@ -192,13 +194,16 @@ jobs:
         Write-Output "=== DRY RUN: Release Preview ==="
         Write-Output "Tag: v$version"
         Write-Output "Name: Palworld Breeding Tree v$version"
-        Write-Output "Executable: $exePath"
+        Write-Output "Executable (Unix path): $exePath"
         
-        if (Test-Path $exePath) {
-          $fileSize = (Get-Item $exePath).Length
+        # Convert to Windows path for local verification
+        $winPath = $exePath.Replace('/', '\')
+        if (Test-Path $winPath) {
+          $fileSize = (Get-Item $winPath).Length
           Write-Output "Executable size: $([math]::Round($fileSize/1MB, 2)) MB"
+          Write-Output "Local path: $winPath"
         } else {
-          Write-Warning "Executable not found at: $exePath"
+          Write-Warning "Executable not found at: $winPath"
         }
         
         Write-Output ""
@@ -209,13 +214,35 @@ jobs:
     - name: Verify executable before release
       if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false' && github.event.inputs.dry_run != 'true'
       run: |
-        $exePath = "${{ steps.build.outputs.EXE_PATH }}"
+        $unixPath = "${{ steps.build.outputs.EXE_PATH }}"
+        # Convert back to Windows path for local verification
+        $exePath = $unixPath.Replace('/', '\')
+        
         if (-not (Test-Path $exePath)) {
-          Write-Error "Executable not found at: $exePath"
+          Write-Error "Executable not found at: $exePath (Unix path: $unixPath)"
           exit 1
         }
         $fileSize = (Get-Item $exePath).Length
         Write-Output "Executable found: $exePath (Size: $([math]::Round($fileSize/1MB, 2)) MB)"
+        Write-Output "Unix path for release: $unixPath"
+      shell: powershell
+    
+    - name: Debug file listing
+      if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false' && github.event.inputs.dry_run != 'true'
+      run: |
+        Write-Output "=== Directory Listing ==="
+        Write-Output "Current directory:"
+        Get-Location
+        Write-Output "Build directory contents:"
+        if (Test-Path "Build") {
+          Get-ChildItem "Build" | ForEach-Object { Write-Output "  $($_.Name) ($($_.Length) bytes)" }
+        } else {
+          Write-Output "  Build directory not found"
+        }
+        
+        $unixPath = "${{ steps.build.outputs.EXE_PATH }}"
+        Write-Output "File to upload: $unixPath"
+        Write-Output "File exists check: $(Test-Path $unixPath.Replace('/', '\'))"
       shell: powershell
     
     - name: Create Release
