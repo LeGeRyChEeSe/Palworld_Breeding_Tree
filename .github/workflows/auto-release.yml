@@ -61,19 +61,26 @@ jobs:
       id: get_latest_version
       if: steps.check_tag.outputs.TAG_EXISTS == 'false'
       run: |
-        try {
-          $latestTag = git describe --tags --abbrev=0 2>&1
-          if ($LASTEXITCODE -eq 0) {
-            $latestVersion = $latestTag -replace '^v', ''
-            Write-Output "LATEST_VERSION=$latestVersion" >> $env:GITHUB_OUTPUT
-            Write-Output "Latest version: $latestVersion"
-          } else {
+        # Check if any tags exist
+        $allTags = git tag -l
+        if ($allTags -and $allTags.Count -gt 0) {
+          try {
+            $latestTag = git describe --tags --abbrev=0
+            if ($LASTEXITCODE -eq 0 -and $latestTag) {
+              $latestVersion = $latestTag -replace '^v', ''
+              Write-Output "LATEST_VERSION=$latestVersion" >> $env:GITHUB_OUTPUT
+              Write-Output "Latest version: $latestVersion"
+            } else {
+              Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
+              Write-Output "No valid previous tags found"
+            }
+          } catch {
             Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
-            Write-Output "No previous tags found"
+            Write-Output "Error getting latest tag: $_"
           }
-        } catch {
+        } else {
           Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
-          Write-Output "No previous tags found"
+          Write-Output "No previous tags found - this will be the first release"
         }
       shell: powershell
     
