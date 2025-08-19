@@ -141,7 +141,8 @@ jobs:
         $changelogPath = "CHANGELOG.md"
         
         if (Test-Path $changelogPath) {
-          $content = Get-Content $changelogPath -Raw
+          # Read with UTF-8 encoding to properly handle emojis
+          $content = Get-Content $changelogPath -Raw -Encoding UTF8
           # Extract changelog section for current version only
           # Pattern matches ## [version] or ## version and captures content until next version or end
           $escapedVersion = $version.Replace('.', '\.')
@@ -167,8 +168,10 @@ jobs:
           $changelog = "Release version $version"
         }
         
-        # Handle multi-line content for GitHub Actions
+        # Handle multi-line content for GitHub Actions with UTF-8 encoding
         $delimiter = "EOF_CHANGELOG_$(Get-Random)"
+        # Use UTF-8 encoding for output to preserve emojis
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         Write-Output "CHANGELOG<<$delimiter" >> $env:GITHUB_OUTPUT
         Write-Output $changelog >> $env:GITHUB_OUTPUT
         Write-Output $delimiter >> $env:GITHUB_OUTPUT
@@ -182,8 +185,37 @@ jobs:
       run: |
         $version = "${{ steps.extract_version.outputs.VERSION }}"
         $exePath = "${{ steps.build.outputs.EXE_PATH }}"
-        Write-Output "DRY RUN: Would create release v$version with executable: $exePath"
-        Write-Output "Changelog: ${{ steps.changelog.outputs.CHANGELOG }}"
+        
+        # Set UTF-8 encoding for console output
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        
+        Write-Output "=== DRY RUN: Release Preview ==="
+        Write-Output "Tag: v$version"
+        Write-Output "Name: Palworld Breeding Tree v$version"
+        Write-Output "Executable: $exePath"
+        
+        if (Test-Path $exePath) {
+          $fileSize = (Get-Item $exePath).Length
+          Write-Output "Executable size: $([math]::Round($fileSize/1MB, 2)) MB"
+        } else {
+          Write-Warning "Executable not found at: $exePath"
+        }
+        
+        Write-Output ""
+        Write-Output "=== Changelog Preview ==="
+        Write-Output "${{ steps.changelog.outputs.CHANGELOG }}"
+      shell: powershell
+    
+    - name: Verify executable before release
+      if: steps.compare_versions.outputs.SHOULD_RELEASE == 'true' && steps.check_tag.outputs.TAG_EXISTS == 'false' && github.event.inputs.dry_run != 'true'
+      run: |
+        $exePath = "${{ steps.build.outputs.EXE_PATH }}"
+        if (-not (Test-Path $exePath)) {
+          Write-Error "Executable not found at: $exePath"
+          exit 1
+        }
+        $fileSize = (Get-Item $exePath).Length
+        Write-Output "Executable found: $exePath (Size: $([math]::Round($fileSize/1MB, 2)) MB)"
       shell: powershell
     
     - name: Create Release
@@ -202,6 +234,9 @@ jobs:
     - name: Summary
       if: always()
       run: |
+        # Set UTF-8 encoding for console output
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        
         $version = "${{ steps.extract_version.outputs.VERSION }}"
         $tagExists = "${{ steps.check_tag.outputs.TAG_EXISTS }}"
         $shouldRelease = "${{ steps.compare_versions.outputs.SHOULD_RELEASE }}"
@@ -221,5 +256,9 @@ jobs:
           Write-Output "Result: Dry run completed successfully"
         } else {
           Write-Output "Result: Release created successfully"
+          $exePath = "${{ steps.build.outputs.EXE_PATH }}"
+          if ($exePath) {
+            Write-Output "Executable included: $exePath"
+          }
         }
       shell: powershell
