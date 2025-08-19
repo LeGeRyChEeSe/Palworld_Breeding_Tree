@@ -61,12 +61,17 @@ jobs:
       id: get_latest_version
       if: steps.check_tag.outputs.TAG_EXISTS == 'false'
       run: |
-        $latestTag = git describe --tags --abbrev=0 2>$null
-        if ($LASTEXITCODE -eq 0) {
-          $latestVersion = $latestTag -replace '^v', ''
-          Write-Output "LATEST_VERSION=$latestVersion" >> $env:GITHUB_OUTPUT
-          Write-Output "Latest version: $latestVersion"
-        } else {
+        try {
+          $latestTag = git describe --tags --abbrev=0 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            $latestVersion = $latestTag -replace '^v', ''
+            Write-Output "LATEST_VERSION=$latestVersion" >> $env:GITHUB_OUTPUT
+            Write-Output "Latest version: $latestVersion"
+          } else {
+            Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
+            Write-Output "No previous tags found"
+          }
+        } catch {
           Write-Output "LATEST_VERSION=" >> $env:GITHUB_OUTPUT
           Write-Output "No previous tags found"
         }
